@@ -6,6 +6,11 @@ Give it a screenshot, and it reads the grid with plain image processing (no ML),
 finds the path from 1 to N that fills every cell with a pruned backtracking search, and
 writes the screenshot back out with the solution drawn on it. About 100 ms end to end.
 
+**Web version:** https://youcantgothatway.github.io/zip-puzzle-solver/. Paste a screenshot
+(on iPhone: screenshot → tap preview → Copy and Delete → Paste). It runs entirely in your
+browser; nothing is uploaded. The page lives in `docs/` and is a JavaScript port of the
+Python code. `tests/test_web.py` checks that both read the same grid.
+
 ```
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python zip_solver.py screenshot.png      # -> screenshot_solved.png

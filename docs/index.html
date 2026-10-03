@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zip Puzzle Solver</title>
+<meta name="description" content="Paste a screenshot of the Zip puzzle and get the solution. Runs entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23ff8c3c'/><path d='M8 9h16v7H8v7h16' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #5f6672;
+    --border: #dfe2e7; --accent: #ff8c3c; --accent-text: #ffffff; --error: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111317; --card: #1b1e24; --text: #eceef2; --muted: #9aa1ad;
+      --border: #2c3038; --accent: #ff8c3c; --accent-text: #16181d; --error: #ff7b72;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 520px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .drop {
+    background: var(--card); border: 2px dashed var(--border); border-radius: 16px;
+    padding: 22px 16px; text-align: center; transition: border-color .15s;
+  }
+  .drop.over { border-color: var(--accent); }
+  .buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  button, .file-btn {
+    font: inherit; font-weight: 600; border-radius: 999px; padding: 12px 22px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .file-btn input { display: none; }
+  .hint { color: var(--muted); font-size: .875rem; margin: 12px 0 0; }
+  #status { min-height: 1.5em; margin: 16px 2px 8px; color: var(--muted); font-size: .9rem; }
+  #status.error { color: var(--error); }
+  #result { width: 100%; height: auto; display: none; border-radius: 14px; }
+  pre#grid { font-size: .8rem; color: var(--muted); background: var(--card); padding: 10px 12px; border-radius: 10px; overflow-x: auto; display: none; }
+  details { margin-top: 28px; color: var(--muted); font-size: .9rem; }
+  summary { cursor: pointer; color: var(--text); }
+  footer { margin-top: 28px; color: var(--muted); font-size: .8rem; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Zip Puzzle Solver</h1>
+  <p class="sub">Paste a screenshot of the Zip puzzle and get the path.</p>
+
+  <div class="drop" id="drop">
+    <div class="buttons">
+      <button class="primary" id="paste">Paste screenshot</button>
+      <label class="file-btn">Choose photo<input type="file" id="file" accept="image/*"></label>
+    </div>
+    <p class="hint">On iPhone: take a screenshot, tap the preview, choose <b>Copy&nbsp;and&nbsp;Delete</b>, then tap Paste. On a computer you can also press ⌘V / Ctrl+V or drop an image here.</p>
+  </div>
+
+  <p id="status"></p>
+  <canvas id="result"></canvas>
+  <pre id="grid"></pre>
+
+  <details>
+    <summary>How it works</summary>
+    <p>Everything runs in your browser; the image is never uploaded. The page finds the grid lines,
+    reads each number by comparing it with reference digits, then searches for the path from 1 to the
+    last number that fills every cell, discarding any branch that can no longer reach the next
+    number or that cuts off part of the board.</p>
+  </details>
+
+  <footer>
+    Not affiliated with or endorsed by LinkedIn. Zip is a trademark of LinkedIn.
+    · <a href="https://github.com/YouCantGoThatWay/zip-puzzle-solver">Source on GitHub</a>
+  </footer>
+</main>
+
+<script src="digits.js"></script>
+<script src="zip.js"></script>
+<script>
+  const statusEl = document.getElementById("status");
+  const canvas = document.getElementById("result");
+  const gridEl = document.getElementById("grid");
+
+  function setStatus(msg, isError = false) {
+    statusEl.textContent = msg;
+    statusEl.className = isError ? "error" : "";
+  }
+
+  function showGrid(grid) {
+    gridEl.textContent = grid.map(row => row.map(v => (v ? String(v) : ".").padStart(2)).join(" ")).join("\n");
+    gridEl.style.display = "block";
+  }
+
+  async function handleBlob(blob) {
+    if (!blob || !blob.type.startsWith("image/")) return setStatus("That wasn't an image.", true);
+    canvas.style.display = "none";
+    gridEl.style.display = "none";
+    setStatus("Solving…");
+    let img;
+    try {
+      img = await createImageBitmap(blob);
+    } catch {
+      return setStatus("Couldn't open that image.", true);
+    }
+    // Let the status repaint before the synchronous work.
+    await new Promise(requestAnimationFrame);
+
+    const t0 = performance.now();
+    const w = img.width, h = img.height;
+    const work = new OffscreenCanvasOrCanvas(w, h);
+    const wctx = work.getContext("2d", { willReadFrequently: true });
+    wctx.drawImage(img, 0, 0);
+    const gray = ZipCore.toGray(wctx.getImageData(0, 0, w, h).data, w, h);
+
+    let board;
+    try {
+      board = ZipCore.parse(gray, w, h, DIGIT_TEMPLATES);
+    } catch (e) {
+      if (e.grid) showGrid(e.grid);
+      return setStatus(e.message + " Make sure the whole board is visible.", true);
+    }
+    const t1 = performance.now();
+    const path = ZipCore.solve(board.grid);
+    const t2 = performance.now();
+    if (!path) {
+      showGrid(board.grid);
+      return setStatus("No solution found; the numbers may have been misread.", true);
+    }
+    render(img, board, path);
+    setStatus(`Solved ${board.grid.length}×${board.grid.length} in ${Math.round(t2 - t0)} ms (read ${Math.round(t1 - t0)} ms, solve ${Math.round(t2 - t1)} ms).`);
+  }
+
+  function OffscreenCanvasOrCanvas(w, h) {
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  // Draw the board region of the screenshot with the path on top.
+  function render(img, board, path) {
+    const { xs, ys, grid } = board;
+    const cell = xs[1] - xs[0];
+    const pad = Math.round(cell * 0.25);
+    const sx = Math.max(0, Math.floor(xs[0] - pad)), sy = Math.max(0, Math.floor(ys[0] - pad));
+    const sw = Math.min(img.width, Math.ceil(xs[xs.length - 1] + pad)) - sx;
+    const sh = Math.min(img.height, Math.ceil(ys[ys.length - 1] + pad)) - sy;
+    canvas.width = sw; canvas.height = sh;
+    const ctx = canvas.getContext("2d");
+    const center = (r, c) => [(xs[c] + xs[c + 1]) / 2 - sx, (ys[r] + ys[r + 1]) / 2 - sy];
+
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    ctx.globalAlpha = 0.65;
+    ctx.strokeStyle = "#ff8c3c";
+    ctx.lineWidth = cell * 0.3;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    path.forEach(([r, c], i) => { const [x, y] = center(r, c); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Put the number disks back on top so they stay readable.
+    grid.forEach((row, r) => row.forEach((v, c) => {
+      if (!v) return;
+      const [x, y] = center(r, c);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, cell * 0.37, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
+    }));
+
+    const [x0, y0] = center(...path[0]);
+    ctx.strokeStyle = "#4caf50";
+    ctx.lineWidth = Math.max(2, cell * 0.06);
+    ctx.beginPath();
+    ctx.arc(x0, y0, cell * 0.42, 0, Math.PI * 2);
+    ctx.stroke();
+
+    canvas.style.display = "block";
+    canvas.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // Paste button: async clipboard API (iOS Safari shows a "Paste" bubble to confirm).
+  document.getElementById("paste").addEventListener("click", async () => {
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      return setStatus("This browser can't read the clipboard from a button. Use Choose photo, or press ⌘V / Ctrl+V.", true);
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(t => t.startsWith("image/"));
+        if (type) return handleBlob(await item.getType(type));
+      }
+      setStatus("No image on the clipboard. Copy a screenshot first.", true);
+    } catch {
+      setStatus("Couldn't read the clipboard. Use Choose photo instead.", true);
+    }
+  });
+
+  // Keyboard paste (⌘V / Ctrl+V) anywhere on the page.
+  document.addEventListener("paste", (e) => {
+    const file = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith("image/"));
+    if (file) { e.preventDefault(); handleBlob(file); }
+  });
+
+  document.getElementById("file").addEventListener("change", (e) => {
+    if (e.target.files[0]) handleBlob(e.target.files[0]);
+    e.target.value = "";
+  });
+
+  const drop = document.getElementById("drop");
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    if (e.dataTransfer.files[0]) handleBlob(e.dataTransfer.files[0]);
+  });
+</script>
+</body>
+</html>
