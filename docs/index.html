@@ -76,11 +76,13 @@
   <footer>
     Not affiliated with or endorsed by LinkedIn. Zip is a trademark of LinkedIn.
     · <a href="https://github.com/YouCantGoThatWay/zip-puzzle-solver">Source on GitHub</a>
+    · v2 (walls)
   </footer>
 </main>
 
-<script src="digits.js"></script>
-<script src="zip.js"></script>
+<!-- Bump ?v= on every change so phones don't keep stale cached scripts. -->
+<script src="digits.js?v=2"></script>
+<script src="zip.js?v=2"></script>
 <script>
   const statusEl = document.getElementById("status");
   const canvas = document.getElementById("result");
