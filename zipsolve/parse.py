@@ -1,10 +1,11 @@
 """Screenshot -> Zip grid using classical image processing (no ML).
 
 The board is found from its evenly spaced gray grid lines; numbered cells are
-black disks; digits are white blobs inside a disk, matched against templates.
+black disks; digits are white blobs inside a disk, matched against templates;
+walls are thick black bars along cell edges.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -19,6 +20,7 @@ class Board:
     grid: list[list[int]]
     xs: list[float]  # N+1 vertical line positions
     ys: list[float]  # N+1 horizontal line positions
+    walls: list = field(default_factory=list)  # [((r1, c1), (r2, c2)), ...]
 
     def center(self, r, c):
         return ((self.xs[c] + self.xs[c + 1]) / 2, (self.ys[r] + self.ys[r + 1]) / 2)
@@ -90,10 +92,15 @@ def _normalize(glyph_mask):
 def cell_glyphs(cell):
     """Return normalized digit glyphs (left to right) if the cell holds a disk, else None."""
     dark = cell < 110
-    if dark.mean() < 0.2:
+    h, w = dark.shape
+    # Judge by the middle of the cell so wall bars along the edges don't count.
+    core = dark[h // 4:h - h // 4, w // 4:w - w // 4]
+    if core.mean() < 0.3:
         return None
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
-    disk_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    # The disk is the dark component covering most of the middle (walls never reach it).
+    core_labels = labels[h // 4:h - h // 4, w // 4:w - w // 4]
+    disk_label = int(np.bincount(core_labels[core_labels > 0]).argmax())
     contours, _ = cv2.findContours((labels == disk_label).astype(np.uint8),
                                    cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     disk = np.zeros(cell.shape, np.uint8)
@@ -108,6 +115,29 @@ def cell_glyphs(cell):
     if not blobs:
         raise ParseError("found a disk with no digits")
     return [_normalize(labels == i) for i in blobs]
+
+
+def find_walls(gray, xs, ys):
+    """Edges whose middle stretch is mostly black are walls."""
+    n = len(xs) - 1
+    walls = []
+
+    def dark(patch):
+        return patch.size and (patch < 80).mean() > 0.5
+
+    for r in range(n):
+        for c in range(n):
+            s = xs[c + 1] - xs[c]
+            t = max(1, round(0.06 * s))
+            if c + 1 < n:  # edge to the right
+                x = round(xs[c + 1])
+                if dark(gray[int(ys[r] + 0.25 * s):int(ys[r + 1] - 0.25 * s), x - t:x + t + 1]):
+                    walls.append(((r, c), (r, c + 1)))
+            if r + 1 < n:  # edge below
+                y = round(ys[r + 1])
+                if dark(gray[y - t:y + t + 1, int(xs[c] + 0.25 * s):int(xs[c + 1] - 0.25 * s)]):
+                    walls.append(((r, c), (r + 1, c)))
+    return walls
 
 
 def iter_cells(gray, xs, ys):
@@ -145,4 +175,4 @@ def parse(image, templates=None):
     if nums != list(range(1, len(nums) + 1)):
         shown = "\n".join(" ".join(f"{v:2d}" for v in row) for row in grid)
         raise ParseError(f"digits misread (expected 1..{len(nums)}, got {nums}):\n{shown}")
-    return Board(grid, xs, ys)
+    return Board(grid, xs, ys, find_walls(gray, xs, ys))

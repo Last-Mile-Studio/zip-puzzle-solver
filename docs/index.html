@@ -67,8 +67,8 @@
 
   <details>
     <summary>How it works</summary>
-    <p>Everything runs in your browser; the image is never uploaded. The page finds the grid lines,
-    reads each number by comparing it with reference digits, then searches for the path from 1 to the
+    <p>Everything runs in your browser; the image is never uploaded. The page finds the grid lines and any
+    walls, reads each number by comparing it with reference digits, then searches for the path from 1 to the
     last number that fills every cell, discarding any branch that can no longer reach the next
     number or that cuts off part of the board.</p>
   </details>
@@ -125,7 +125,7 @@
       return setStatus(e.message + " Make sure the whole board is visible.", true);
     }
     const t1 = performance.now();
-    const path = ZipCore.solve(board.grid);
+    const path = ZipCore.solve(board.grid, board.walls);
     const t2 = performance.now();
     if (!path) {
       showGrid(board.grid);

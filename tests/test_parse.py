@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import cv2
@@ -9,26 +10,49 @@ from zipsolve.solve import is_valid, solve
 
 FIX = Path(__file__).parent / "fixtures"
 
-# Screenshots are kept out of the repo; these tests run only where one exists locally.
-pytestmark = pytest.mark.skipif(not (FIX / "hard_8x8.png").exists(), reason="fixture screenshot not present")
+
+def needs(name):
+    # Screenshots are kept out of the repo; these tests run only where one exists locally.
+    return pytest.mark.skipif(not (FIX / f"{name}.png").exists(), reason=f"{name}.png not present")
 
 
 def load(name):
+    """Return (image, grid, walls) for a fixture. Truth is .json (with walls) or .txt (grid only)."""
+    image = cv2.imread(str(FIX / f"{name}.png"))
+    if (FIX / f"{name}.json").exists():
+        truth = json.loads((FIX / f"{name}.json").read_text())
+        return image, truth["grid"], truth["walls"]
     grid = [list(map(int, l.split())) for l in open(FIX / f"{name}.txt") if l.strip()]
-    return cv2.imread(str(FIX / f"{name}.png")), grid
+    return image, grid, []
 
 
-@pytest.mark.parametrize("scale", [1.0, 0.6, 0.8, 1.5])
-def test_parse_fixture_at_scales(scale):
-    image, truth = load("hard_8x8")
-    if scale != 1.0:
-        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    assert parse(image).grid == truth
+def norm_walls(walls):
+    return sorted(tuple(sorted(tuple(cell) for cell in w)) for w in walls)
 
 
-def test_end_to_end(tmp_path):
+def scaled(image, scale):
+    if scale == 1.0:
+        return image
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
+    return cv2.resize(image, None, fx=scale, fy=scale, interpolation=interp)
+
+
+CASES = [("hard_8x8", s) for s in (1.0, 0.6, 0.8, 1.5)] + [("walls_7x7", s) for s in (1.0, 1.5, 3.0)]
+
+
+@pytest.mark.parametrize("name,scale", [pytest.param(n, s, marks=needs(n)) for n, s in CASES])
+def test_parse_fixture(name, scale):
+    image, grid, walls = load(name)
+    board = parse(scaled(image, scale))
+    assert board.grid == grid
+    assert norm_walls(board.walls) == norm_walls(walls)
+
+
+@pytest.mark.parametrize("name", [pytest.param(n, marks=needs(n)) for n in ("hard_8x8", "walls_7x7")])
+def test_end_to_end(name, tmp_path):
     out = tmp_path / "solved.png"
-    main([str(FIX / "hard_8x8.png"), "-o", str(out)])
+    main([str(FIX / f"{name}.png"), "-o", str(out)])
     assert cv2.imread(str(out)) is not None
-    image, truth = load("hard_8x8")
-    assert is_valid(truth, solve(parse(image).grid))
+    image, grid, walls = load(name)
+    board = parse(image)
+    assert is_valid(grid, solve(board.grid, board.walls), walls)

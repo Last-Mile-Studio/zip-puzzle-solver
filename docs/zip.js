@@ -157,14 +157,22 @@ const ZipCore = (() => {
   function cellGlyphs(cell, w, h) {
     const size = w * h;
     const dark = new Uint8Array(size);
-    let darkCount = 0;
-    for (let i = 0; i < size; i++) if (cell[i] < 110) { dark[i] = 1; darkCount++; }
-    if (darkCount / size < 0.2) return null;
+    for (let i = 0; i < size; i++) if (cell[i] < 110) dark[i] = 1;
+    // Judge by the middle of the cell so wall bars along the edges don't count.
+    const qy = h >> 2, qx = w >> 2;
+    let coreDark = 0, coreSize = 0;
+    for (let y = qy; y < h - qy; y++) for (let x = qx; x < w - qx; x++) { coreDark += dark[y * w + x]; coreSize++; }
+    if (coreDark / coreSize < 0.3) return null;
 
-    // Largest dark component = the disk.
+    // The disk is the dark component covering most of the middle (walls never reach it).
     const dc = components(dark, w, h);
-    let diskLabel = 1;
-    for (let i = 2; i < dc.areas.length; i++) if (dc.areas[i] > dc.areas[diskLabel]) diskLabel = i;
+    const votes = new Map();
+    for (let y = qy; y < h - qy; y++) for (let x = qx; x < w - qx; x++) {
+      const l = dc.labels[y * w + x];
+      if (l) votes.set(l, (votes.get(l) || 0) + 1);
+    }
+    let diskLabel = 0, bestVotes = -1;
+    for (const [l, v] of votes) if (v > bestVotes || (v === bestVotes && l < diskLabel)) { bestVotes = v; diskLabel = l; }
 
     // Fill its holes: anything not reachable from the border without crossing the disk.
     const outside = new Uint8Array(size);
@@ -223,6 +231,28 @@ const ZipCore = (() => {
     return best;
   }
 
+  // Edges whose middle stretch is mostly black are walls. Returns [[[r1, c1], [r2, c2]], ...].
+  function findWalls(gray, w, xs, ys) {
+    const n = xs.length - 1, walls = [];
+    const darkFrac = (x0, x1, y0, y1) => {
+      let d = 0, tot = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { tot++; if (gray[y * w + x] < 80) d++; }
+      return tot ? d / tot : 0;
+    };
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      const s = xs[c + 1] - xs[c], t = Math.max(1, Math.round(0.06 * s));
+      if (c + 1 < n) {
+        const x = Math.round(xs[c + 1]);
+        if (darkFrac(x - t, x + t + 1, Math.floor(ys[r] + 0.25 * s), Math.floor(ys[r + 1] - 0.25 * s)) > 0.5) walls.push([[r, c], [r, c + 1]]);
+      }
+      if (r + 1 < n) {
+        const y = Math.round(ys[r + 1]);
+        if (darkFrac(Math.floor(xs[c] + 0.25 * s), Math.floor(xs[c + 1] - 0.25 * s), y - t, y + t + 1) > 0.5) walls.push([[r, c], [r + 1, c]]);
+      }
+    }
+    return walls;
+  }
+
   function parse(gray, w, h, templates) {
     const { xs, ys } = findGrid(gray, w, h);
     const n = xs.length - 1;
@@ -244,13 +274,13 @@ const ZipCore = (() => {
       err.grid = grid;
       throw err;
     }
-    return { grid, xs, ys };
+    return { grid, xs, ys, walls: findWalls(gray, w, xs, ys) };
   }
 
   // ---------- solver ----------
 
-  // Returns [[r, c], ...] from 1 to K covering every cell, or null.
-  function solve(grid) {
+  // Returns [[r, c], ...] from 1 to K covering every cell without crossing a wall, or null.
+  function solve(grid, walls = []) {
     const n = grid.length, total = n * n;
     const flat = grid.flat();
     const kMax = Math.max(...flat);
@@ -258,13 +288,18 @@ const ZipCore = (() => {
     flat.forEach((v, i) => { if (v) pos[v] = i; });
     const end = pos[kMax];
 
+    const blocked = new Set(walls.map(([[r1, c1], [r2, c2]]) => {
+      const a = r1 * n + c1, b = r2 * n + c2;
+      return Math.min(a, b) * total + Math.max(a, b);
+    }));
+    const open = (a, b) => !blocked.has(Math.min(a, b) * total + Math.max(a, b));
     const nbrs = [];
     for (let i = 0; i < total; i++) {
       const r = Math.floor(i / n), c = i % n, nb = [];
-      if (r > 0) nb.push(i - n);
-      if (r < n - 1) nb.push(i + n);
-      if (c > 0) nb.push(i - 1);
-      if (c < n - 1) nb.push(i + 1);
+      if (r > 0 && open(i, i - n)) nb.push(i - n);
+      if (r < n - 1 && open(i, i + n)) nb.push(i + n);
+      if (c > 0 && open(i, i - 1)) nb.push(i - 1);
+      if (c < n - 1 && open(i, i + 1)) nb.push(i + 1);
       nbrs.push(nb);
     }
 
@@ -348,13 +383,15 @@ const ZipCore = (() => {
     return path.map((i) => [Math.floor(i / n), i % n]);
   }
 
-  function isValid(grid, path) {
+  function isValid(grid, path, walls = []) {
     const n = grid.length;
+    const key = (r1, c1, r2, c2) => [r1 * n + c1, r2 * n + c2].sort((a, b) => a - b).join(",");
+    const blocked = new Set(walls.map(([[r1, c1], [r2, c2]]) => key(r1, c1, r2, c2)));
     if (!path || path.length !== n * n) return false;
     if (new Set(path.map(([r, c]) => r * n + c)).size !== n * n) return false;
     for (let i = 1; i < path.length; i++) {
       const [r1, c1] = path[i - 1], [r2, c2] = path[i];
-      if (Math.abs(r1 - r2) + Math.abs(c1 - c2) !== 1) return false;
+      if (Math.abs(r1 - r2) + Math.abs(c1 - c2) !== 1 || blocked.has(key(r1, c1, r2, c2))) return false;
     }
     const seq = path.map(([r, c]) => grid[r][c]).filter(Boolean);
     return seq.every((v, i) => v === i + 1) && grid[path[n * n - 1][0]][path[n * n - 1][1]] === seq.length;

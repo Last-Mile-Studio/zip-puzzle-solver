@@ -3,7 +3,7 @@
 Solves [Zip](https://www.linkedin.com/games/zip/), the daily path puzzle on LinkedIn, from a screenshot.
 
 Give it a screenshot, and it reads the grid with plain image processing (no ML),
-finds the path from 1 to N that fills every cell with a pruned backtracking search, and
+finds the path from 1 to N that fills every cell (without crossing any walls) with a pruned backtracking search, and
 writes the screenshot back out with the solution drawn on it. About 100 ms end to end.
 
 **Web version:** https://youcantgothatway.github.io/zip-puzzle-solver/. Paste a screenshot
@@ -18,7 +18,8 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ## How it works
 - `zipsolve/parse.py`: finds the evenly spaced grid lines, detects the black number disks,
-  and matches each digit against templates in `zipsolve/digits.npz`.
+  matches each digit against templates in `zipsolve/digits.npz`, and finds walls (thick black
+  bars along cell edges).
 - `zipsolve/solve.py`: depth-first search over a bitmask. It drops a branch when the
   next number becomes unreachable, the free cells split apart, or a cell is left with
   fewer than two exits.

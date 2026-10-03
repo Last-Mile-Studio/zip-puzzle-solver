@@ -31,9 +31,11 @@ def main(argv=None):
     except ParseError as e:
         sys.exit(f"parse failed: {e}")
     t2 = time.perf_counter()
-    path = solve(board.grid)
+    path = solve(board.grid, board.walls)
     t3 = time.perf_counter()
 
+    if board.walls:
+        print(f"{len(board.walls)} wall segments")
     for row in board.grid:
         print(" ".join(f"{v:2d}" if v else " ." for v in row))
     if path is None:
