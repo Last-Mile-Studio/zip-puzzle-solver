@@ -16,7 +16,8 @@ ROOT = Path(__file__).parent.parent
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
-CASES = [("hard_8x8", s) for s in (1.0, 0.6, 0.8, 1.5)] + [("walls_7x7", s) for s in (1.0, 1.5, 3.0)]
+CASES = ([("hard_8x8", s) for s in (1.0, 0.6, 0.8, 1.5)] + [("walls_7x7", s) for s in (1.0, 1.5, 3.0)]
+         + [("walls_6x6", s) for s in (1.0, 0.6, 0.8)])
 
 
 @pytest.mark.parametrize("name,scale", [pytest.param(n, s, marks=needs(n)) for n, s in CASES])

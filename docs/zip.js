@@ -67,24 +67,48 @@ const ZipCore = (() => {
     return out;
   }
 
-  function longestEvenChain(pos, spacing, tol) {
-    let best = [];
-    for (let i = 0; i < pos.length; i++) {
-      const chain = [pos[i]];
-      for (const p of pos.slice(i + 1)) {
-        const gap = p - chain[chain.length - 1];
-        if (Math.abs(gap - spacing) <= tol) chain.push(p);
-        else if (gap > spacing + tol) break;
-      }
-      if (chain.length > best.length) best = chain;
+  // Cell size: the gap that explains the most gaps as whole multiples of itself.
+  // Walls can hide grid lines, so some gaps are 2x or 3x the real spacing.
+  function estimateSpacing(pos, minSpacing) {
+    const gaps = pos.slice(1).map((v, i) => v - pos[i]).filter((g) => g >= minSpacing);
+    if (!gaps.length) throw new ParseError("Couldn't find the puzzle grid in this image.");
+    const fits = (g) => gaps.filter((x) => Math.abs(x / g - Math.round(x / g)) * g <= 0.15 * g).length;
+    let best = null, bestFits = -1;
+    for (const g of [...gaps].sort((x, y) => x - y)) {  // ties go to the smallest gap
+      const f = fits(g);
+      if (f > bestFits) { bestFits = f; best = g; }
     }
     return best;
   }
 
-  function median(a) {
-    const s = [...a].sort((x, y) => x - y);
-    const m = s.length >> 1;
-    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  // Longest run of positions spaced `spacing` apart (within tol). A gap of 2-4x spacing is
+  // bridged when the profile shows some line at each missing position: a wall lying on a
+  // grid line hides part of it.
+  function longestEvenChain(pos, spacing, tol, profile, minEvidence) {
+    const evidence = (p) => {
+      const r = Math.max(1, Math.floor(0.05 * spacing));
+      let m = 0;
+      for (let i = Math.max(0, Math.floor(p) - r); i <= Math.floor(p) + r && i < profile.length; i++) m = Math.max(m, profile[i]);
+      return m;
+    };
+    let best = [];
+    for (let i = 0; i < pos.length; i++) {
+      const chain = [pos[i]];
+      for (const p of pos.slice(i + 1)) {
+        const last = chain[chain.length - 1], gap = p - last;
+        const k = Math.round(gap / spacing);
+        if (k < 1 || Math.abs(gap - k * spacing) > tol * k) {
+          if (gap > 4 * spacing + tol) break;
+          continue;
+        }
+        const missing = [];
+        for (let j = 1; j < k; j++) missing.push(last + (gap * j) / k);
+        if (k > 4 || missing.some((m) => evidence(m) < minEvidence)) break;
+        chain.push(...missing, p);
+      }
+      if (chain.length > best.length) best = chain;
+    }
+    return best;
   }
 
   function findGrid(gray, w, h) {
@@ -95,15 +119,14 @@ const ZipCore = (() => {
     for (const v of col) colMax = Math.max(colMax, v);
     let xs = lineCenters(col, 0.6 * colMax);
     if (xs.length < 3) throw new ParseError("Couldn't find the puzzle grid in this image.");
-    const diffs = xs.slice(1).map((v, i) => v - xs[i]);
-    const spacing = median(diffs);
-    xs = longestEvenChain(xs, spacing, 0.15 * spacing);
+    const spacing = estimateSpacing(xs, 0.04 * w);
+    xs = longestEvenChain(xs, spacing, 0.15 * spacing, col, 0.1 * colMax);
 
     const x0 = Math.floor(xs[0]), x1 = Math.floor(xs[xs.length - 1]);
     const row = new Float64Array(h);
     for (let y = 0; y < h; y++) for (let x = x0; x < x1; x++) if (isLine(gray[y * w + x])) row[y]++;
     let ys = lineCenters(row, 0.6 * (x1 - x0));
-    ys = longestEvenChain(ys, spacing, 0.15 * spacing);
+    ys = longestEvenChain(ys, spacing, 0.15 * spacing, row, 0.1 * (x1 - x0));
 
     const n = xs.length - 1;
     if (n < 2 || ys.length !== n + 1) {

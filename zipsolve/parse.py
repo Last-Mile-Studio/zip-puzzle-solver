@@ -39,17 +39,45 @@ def _line_centers(profile, thresh):
     return [float(g.mean()) for g in groups]
 
 
-def _longest_even_chain(pos, spacing, tol):
-    """Longest run of positions spaced `spacing` apart (within tol)."""
+def _spacing(pos, min_spacing):
+    """Cell size: the gap that explains the most gaps as whole multiples of itself.
+
+    Walls can hide grid lines, so some gaps are 2x or 3x the real spacing.
+    """
+    gaps = [b - a for a, b in zip(pos, pos[1:]) if b - a >= min_spacing]
+    if not gaps:
+        raise ParseError("could not find the puzzle grid")
+
+    def fits(g):
+        return sum(abs(x / g - round(x / g)) * g <= 0.15 * g for x in gaps)
+
+    return max(sorted(gaps), key=fits)  # ties go to the smallest gap
+
+
+def _longest_even_chain(pos, spacing, tol, profile, min_evidence):
+    """Longest run of positions spaced `spacing` apart (within tol).
+
+    A gap of 2-4x spacing is bridged when the profile shows at least some line
+    at each missing position: a wall lying on a grid line hides part of it.
+    """
+    def evidence(p):
+        r = max(1, int(0.05 * spacing))
+        return profile[max(0, int(p) - r):int(p) + r + 1].max()
+
     best = []
     for i, start in enumerate(pos):
         chain = [start]
         for p in pos[i + 1:]:
             gap = p - chain[-1]
-            if abs(gap - spacing) <= tol:
-                chain.append(p)
-            elif gap > spacing + tol:
+            k = round(gap / spacing)
+            if k < 1 or abs(gap - k * spacing) > tol * k:
+                if gap > 4 * spacing + tol:
+                    break
+                continue
+            missing = [chain[-1] + gap * j / k for j in range(1, k)]
+            if k > 4 or any(evidence(m) < min_evidence for m in missing):
                 break
+            chain.extend(missing + [p])
         if len(chain) > len(best):
             best = chain
     return best
@@ -64,13 +92,13 @@ def find_grid(gray):
     xs = _line_centers(col, 0.6 * col.max())
     if len(xs) < 3:
         raise ParseError("could not find vertical grid lines")
-    spacing = float(np.median(np.diff(xs)))
-    xs = _longest_even_chain(xs, spacing, 0.15 * spacing)
+    spacing = _spacing(xs, 0.04 * w)
+    xs = _longest_even_chain(xs, spacing, 0.15 * spacing, col, 0.1 * col.max())
 
     x0, x1 = int(xs[0]), int(xs[-1])
     row = lines[:, x0:x1].sum(axis=1)
     ys = _line_centers(row, 0.6 * (x1 - x0))
-    ys = _longest_even_chain(ys, spacing, 0.15 * spacing)
+    ys = _longest_even_chain(ys, spacing, 0.15 * spacing, row, 0.1 * (x1 - x0))
 
     n = len(xs) - 1
     if n < 2 or len(ys) != n + 1:
